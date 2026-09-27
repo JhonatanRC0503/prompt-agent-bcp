@@ -148,6 +148,9 @@ resource appServicePlan 'Microsoft.Web/serverfarms@2024-11-01' = {
 // ---------------------------------------------------------------------------
 // User-assigned identity used as the bot's Microsoft App ID (MultiTenant auth is deprecated).
 // This only creates the identity resource; no role assignments are made.
+// Permisos (estado actual): no se asignó ningún rol/RBAC a tu usuario ni entre recursos.
+// La única identidad creada es esta managed identity, usada solo como Microsoft App ID del bot.
+
 resource botIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
   name: botIdentityName
   location: location

@@ -1,0 +1,9 @@
+# Microsoft Agent Framework + integración con Microsoft Foundry
+agent-framework-foundry>=1.13.1
+
+# SDK de Azure AI Projects (Foundry) y autenticación
+azure-ai-projects>=2.2.0,<2.7.0
+azure-identity>=1.19.0
+
+# Carga de variables de entorno desde .env
+python-dotenv>=1.0.1
