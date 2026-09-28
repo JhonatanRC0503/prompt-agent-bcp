@@ -7,3 +7,7 @@ azure-identity>=1.19.0
 
 # Carga de variables de entorno desde .env
 python-dotenv>=1.0.1
+
+# Herramienta del agente financiero: lectura de Excel desde Blob Storage
+azure-storage-blob>=12.19.0
+openpyxl>=3.1.2
