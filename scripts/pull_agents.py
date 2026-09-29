@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 
 from azure.ai.projects import AIProjectClient
-from azure.identity import AzureCliCredential
+from azure.identity import DefaultAzureCredential
 from dotenv import load_dotenv
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -31,7 +31,7 @@ def main() -> None:
 
     wanted = set(sys.argv[1:])
 
-    with AzureCliCredential() as credential:
+    with DefaultAzureCredential() as credential:
         client = AIProjectClient(endpoint=endpoint, credential=credential)
         for agent in client.agents.list():
             data = agent.as_dict()

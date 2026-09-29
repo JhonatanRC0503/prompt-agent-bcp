@@ -22,7 +22,7 @@ from agent_framework import Agent
 from agent_framework.foundry import FoundryChatClient, to_prompt_agent
 from azure.ai.projects.aio import AIProjectClient
 from azure.ai.projects.models import Connection
-from azure.identity.aio import AzureCliCredential
+from azure.identity.aio import DefaultAzureCredential
 from dotenv import load_dotenv
 
 AGENT_DIR = Path(__file__).parent # agents/sectorial
@@ -91,7 +91,8 @@ async def main() -> None:
     if not knowledge_base_name:
         raise SystemExit(f"Falta KNOWLEDGE_BASE_NAME (defínelo en {AGENT_DIR / '.env'}).")
 
-    async with AzureCliCredential() as credential:
+    # Resuelve `az login` en local y la identidad administrada al desplegar en Azure.
+    async with DefaultAzureCredential() as credential:
         client = FoundryChatClient(project_endpoint=endpoint, model=model, credential=credential)
 
         async with AIProjectClient(endpoint=endpoint, credential=credential) as project:
