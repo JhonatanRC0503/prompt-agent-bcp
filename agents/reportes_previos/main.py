@@ -28,7 +28,7 @@ from dotenv import load_dotenv
 AGENT_DIR = Path(__file__).parent  # agents/reportes_previos
 REPO_ROOT = AGENT_DIR.parents[1]  # raíz del repo
 
-AGENT_NAME = "reportes_previos"
+AGENT_NAME = "reportes-previos"  # Foundry no acepta guion bajo en el nombre del agente
 DESCRIPTION = "Revisor de reportes históricos de clientes para evaluación de riesgo crediticio."
 INSTRUCTIONS = (AGENT_DIR / "instructions.md").read_text(encoding="utf-8").rstrip()
 
