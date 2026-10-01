@@ -1,0 +1,20 @@
+# Dependencias de ejecución de la Function App.
+#
+# Es deliberadamente más corto que el requirements.txt de la raíz: aquel instala el Agent
+# Framework y el SDK de Foundry, que solo hacen falta para definir y publicar los prompt
+# agents desde tu máquina. La Function nunca los importa, y en Flex Consumption el paquete
+# se monta desde Blob en cada arranque en frío, así que incluirlos se pagaría en latencia.
+
+azure-functions>=1.21.0
+
+# Identidad administrada para leer el repositorio de estados financieros.
+azure-identity>=1.19.0
+
+# Lectura del Excel desde Blob Storage (ver eeff.py).
+azure-storage-blob>=12.19.0
+openpyxl>=3.1.2
+
+# Transporte HTTP de los clientes async de Azure (`azure.identity.aio`,
+# `azure.storage.blob.aio`). No lo declara ninguno como dependencia obligatoria, pero sin él
+# ambos fallan en tiempo de ejecución con "aiohttp package is not installed".
+aiohttp>=3.9.0
