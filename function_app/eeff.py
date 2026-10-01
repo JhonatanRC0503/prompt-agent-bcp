@@ -145,7 +145,7 @@ def build_obtener_estados_financieros(account_url: str, container: str, credenti
     """Crea la herramienta, ligada a la cuenta de Storage y al contenedor resueltos en main."""
 
     async def obtener_estados_financieros(
-        ruc: Annotated[str, "RUC de 11 dígitos de la empresa cuyos estados financieros se necesitan."],
+        ruc: Annotated[str, "RUC de la empresa (solo dígitos) cuyos estados financieros se necesitan."],
     ) -> str:
         """Obtiene del repositorio los estados financieros de una empresa a partir de su RUC.
 
@@ -153,9 +153,12 @@ def build_obtener_estados_financieros(account_url: str, container: str, credenti
         Ratios Financieros) con sus periodos como columnas y sus cuentas como filas.
         """
         ruc = ruc.strip()
-        if not ruc.isdigit() or len(ruc) != 11:
+        # La longitud no se valida: el identificador es el nombre del archivo, y los datos de
+        # prueba usan RUC de 9 dígitos. Basta con que sea numérico y no vacío; la búsqueda es
+        # por nombre exacto, así que un valor inexistente solo devuelve "no se encontró".
+        if not ruc.isdigit():
             return json.dumps(
-                {"error": f"El RUC debe tener exactamente 11 dígitos. Se recibió: {ruc!r}"},
+                {"error": f"El RUC debe ser numérico. Se recibió: {ruc!r}"},
                 ensure_ascii=False,
             )
 

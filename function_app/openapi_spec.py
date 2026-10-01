@@ -55,7 +55,7 @@ def construir_spec(base_url: str) -> dict[str, Any]:
                                         "ruc": {
                                             "type": "string",
                                             "description": (
-                                                "RUC de 11 dígitos de la empresa cuyos "
+                                                "RUC de la empresa (solo dígitos) cuyos "
                                                 "estados financieros se necesitan."
                                             ),
                                         }

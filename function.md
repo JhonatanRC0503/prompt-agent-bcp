@@ -450,7 +450,7 @@ az monitor app-insights query --app "$APPID" --analytics-query \
 | `401` al llamar la herramienta | Key equivocada, o header mal nombrado | El header debe ser exactamente `x-functions-key`. Conexión tipo *Claves personalizadas*, no *Clave de API* |
 | `{"error": "Function App mal configurada..."}` | Faltan app settings | Paso 5 |
 | `{"error": "No se encontró el archivo <RUC>.xlsx"}` | El RUC no existe, o la Function no ve el blob | Comprueba que el archivo exista y que el rol del paso 3.1 esté asignado |
-| `{"error": "El RUC debe tener exactamente 11 dígitos"}` | Entrada inválida | No es un fallo: es validación |
+| `{"error": "El RUC debe ser numérico"}` | El valor trae letras o está vacío | No es un fallo: es validación. La longitud no se valida (los datos de prueba usan 9 dígitos) |
 | `AuthorizationFailed` al publicar desde la VM | Falta `Foundry User` | Paso 3.2 |
 | `No existe la conexión 'func-eeff'` | La conexión no está, o el nombre no coincide | Paso 7, y revisa `FUNCTION_CONNECTION_NAME` |
 | `Failed to fetch knowledge bases` | Roles del proyecto Foundry | Ver `roles.md` |
