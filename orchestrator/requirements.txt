@@ -1,0 +1,28 @@
+# Dependencias de runtime del orquestador (App Service).
+# Manifiesto propio, igual que function_app/: ver README, "Dos requirements.txt, a propósito".
+
+# Web
+fastapi>=0.115
+uvicorn[standard]>=0.32
+gunicorn>=23.0
+python-multipart>=0.0.12
+# Importado directamente (intake, seguimiento); llega vía fastapi, pero se declara por ser uso directo
+pydantic>=2.0
+
+# Microsoft Agent Framework + Foundry: invoca a los prompt agents ya publicados
+agent-framework-foundry>=1.13.1
+azure-ai-projects>=2.2.0,<2.7.0
+azure-identity>=1.19.0
+
+# Persistencia de sesiones
+azure-storage-blob>=12.19.0
+
+# Extracción de texto de los adjuntos
+pypdf>=5.1
+openpyxl>=3.1.2
+python-docx>=1.1
+
+# Lectura de PDFs adjuntos: prebuilt-layout devuelve las tablas estructuradas y hace OCR
+azure-ai-documentintelligence>=1.0.0
+
+python-dotenv>=1.0.1

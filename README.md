@@ -14,10 +14,16 @@ Sistema multi-agente para análisis de riesgo crediticio de banca corporativa, c
 
 | Agente | Modelo | Herramientas | Latencia medida |
 |---|---|---|---|
-| `financiero` | gpt-4.1 | `obtener_estados_financieros` (custom) + code interpreter | **77 s** |
+| `financiero` | gpt-4.1 | `obtener_estados_financieros` (openapi) + code interpreter | **77 s** |
 | `sectorial` | gpt-4.1 | web search + code interpreter + MCP (knowledge base) | **85 s** |
+| `reportes-previos` | gpt-4.1 | code interpreter + MCP (`knowledgereportesprevios`) | **~60 s** |
+| `generador-reporte` | gpt-4.1 | ninguna (síntesis pura) | **~45 s** |
 
-Ambos son **prompt agents** publicados en Foundry, definidos desde código con `to_prompt_agent`.
+Los cuatro son **prompt agents** publicados en Foundry, definidos desde código con
+`to_prompt_agent`. Los tres primeros analizan; el cuarto integra sus salidas en el informe final.
+
+El **orquestador** (`orchestrator/`) no es un agente: es código Python desplegado en App Service.
+Ver §3.
 
 ### Estructura del repo
 
@@ -36,6 +42,23 @@ agents/
     main.py
     instructions.md
     .env              # MODEL, KNOWLEDGE_BASE_NAME     (gitignored)
+  generador-reporte/
+    main.py
+    instructions.md
+    .env              # MODEL                         (gitignored)
+orchestrator/         # App Service desplegable: el orquestador
+  app.py              # API FastAPI + stream SSE + interfaz
+  config.py           # ajustes desde el entorno
+  foundry.py          # acceso único a Foundry (agentes publicados + modelo suelto)
+  intake.py           # extrae empresa/RUC/sector y pide lo que falte
+  orquestacion.py     # fan-out concurrente a los 3 especialistas
+  reporte.py          # fan-in: encarga el informe al generador
+  seguimiento.py      # enrutado de las preguntas posteriores al informe
+  sesiones.py         # estado de sesión + bus de eventos
+  persistencia.py     # snapshot de sesiones en Blob (best-effort)
+  adjuntos.py         # extracción de texto de PDF/XLSX/DOCX (+ OCR opcional)
+  static/index.html   # interfaz del analista
+  requirements.txt    # dependencias de runtime del App Service
 function_app/         # Function App desplegable (Flex Consumption)
   function_app.py     # HTTP triggers
   openapi_spec.py     # spec OpenAPI (lo usan la API y main.py al publicar)
@@ -44,10 +67,12 @@ function_app/         # Function App desplegable (Flex Consumption)
   requirements.txt    # solo dependencias de runtime, ver nota abajo
 scripts/
   pull_agents.py      # re-sincroniza instrucciones desde el portal
+  deploy_webapp.py    # despliega el orquestador en App Service (bootstrap + deploy)
 infra/
   main.bicep          # recursos base
 roles.md              # RBAC asignado
 function.md           # runbook: migrar la Function y el agente a otro entorno
+app_service.md        # runbook: desplegar el orquestador en App Service
 requirements.txt      # dependencias para definir/publicar agentes
 .env                  # FOUNDRY_PROJECT_ENDPOINT       (gitignored)
 ```
@@ -77,137 +102,177 @@ python scripts/pull_agents.py                   # trae cambios hechos en el port
 | Foundry + proyecto | `aaifs1rmiad02` / `prj_aaifs1rmiad02` | en uso |
 | Blob Storage | `stacs1miabackd02` | en uso (EEFF + PDFs) |
 | AI Search | `azcssc1rmiad02` | en uso (knowledge base sectorial) |
-| Document Intelligence | `aidieu2rmiad02` | **sin usar** |
-| App Service Plan (B1 Linux) | `aspleu2rmiad02` | **vacío, sin apps** |
+| Document Intelligence | `aidieu2rmiad02` | en uso (lectura de PDFs adjuntos, `prebuilt-layout`) |
+| App Service Plan (B1 Linux) | `aspleu2rmiad02` | en uso (hospeda el orquestador) |
+| App Service (orquestador) | `awaws1rmiad02` | creado; falta config y despliegue (`app_service.md`) |
 | Function App (Flex Consumption) | `afaws1rmiad02` | en uso (tool `obtener_estados_financieros`) |
 | Application Insights | `afaws1rmiad02` | en uso (trazas de la Function) |
 | Azure Bot | `azbseu2rmiad02` | **endpoint placeholder** |
 
 ---
 
-## 2. Decisión clave: ¿App Service, Function, o ambos?
+## 2. Decisión: App Service, no Function App
 
-**Recomendación: una Azure Function App sobre el App Service Plan B1 que ya tienes. Ni App Service
-aparte, ni ambos.**
+**El orquestador va en un App Service sobre el plan B1 `aspleu2rmiad02`.** Esta sección
+reemplaza la recomendación anterior (Function App con `Queue trigger`), porque cambió el
+requisito, no porque aquel análisis estuviera mal.
 
-### Por qué
+### Qué cambió
 
-El problema no es dónde corre el código, es **cuánto tarda**. Estos son los tiempos reales:
+El diseño original era de *disparar y olvidar*: el analista pedía un informe por Teams, el flujo
+corría ~3 minutos y devolvía un mensaje proactivo. Para eso, `Queue trigger` es ideal.
 
-| Concepto | Tiempo |
-|---|---|
-| Agente financiero | 77 s |
-| Agente sectorial | 85 s |
-| Fan-out (ambos en paralelo) | ~85 s |
-| + validador + generador de reporte | ~90 s |
-| **Total estimado del flujo completo** | **~3 min** |
+El requisito actual es **conversacional**: tras recibir el informe, el analista pregunta, pide
+profundizar en una sección, aporta enlaces o adjunta un documento, y el informe se actualiza. Eso
+cambia dos cosas:
 
-Contra estos límites:
-
-| Límite | Valor | Origen |
+| | Flujo por cola | Flujo conversacional |
 |---|---|---|
-| Respuesta al canal (Teams) | **~15 s** | Bot Framework |
-| Respuesta HTTP de una Function | **230 s** | idle timeout del Azure Load Balancer — *no configurable* |
-| Ejecución en plan Dedicated | **ilimitado** | requiere Always On |
+| Estado | No hay: cada ejecución es independiente | Hay sesión viva: las tres secciones, el informe y el hilo |
+| Interacción | Una respuesta y se acabó | N turnos sobre el mismo estado |
+| Progreso | Irrelevante, llega al final | El analista espera minutos: necesita ver el avance |
 
-Un flujo de 3 minutos **no cabe** en una respuesta HTTP síncrona. La arquitectura tiene que ser
-asíncrona sí o sí, sin importar el servicio elegido.
+Un `Queue trigger` no sostiene una sesión interactiva: cada mensaje sería un trabajo aislado que
+tendría que rehidratar el estado desde un almacén externo. Un proceso web con la sesión en
+memoria lo hace directo. Y el App Service sirve además la interfaz del analista, que ahora hace
+falta.
 
-### Comparación
+### El límite de los 230 s no desaparece, se esquiva
 
-| Opción | Veredicto |
-|---|---|
-| **App Service solo** | Funciona, pero tendrías que implementar a mano la cola y el worker en background. |
-| **Function App** ✅ | El `Queue trigger` te da el worker gratis. Y sobre el plan B1 (Dedicated): sin cold start y timeout ilimitado. |
-| **Ambos** | Innecesario. Duplicas despliegue y costo sin ganar nada. |
+Azure Load Balancer corta toda conexión que pase **230 s sin tráfico**. Aplica igual a App
+Service y a Functions, y no es configurable. El flujo dura más que eso.
 
-> ⚠️ **Matiz verificado en el despliegue.** La advertencia *"Linux Consumption apps aren't supported
-> in the same resource group as Linux Dedicated or Linux Premium plans"* aplica al plan **Consumption
-> clásico (Y1)**. **Flex Consumption (FC1) no tiene esa restricción**: se desplegó `afaws1rmiad02` en
-> `RSGRSC1RMIAD02` conviviendo con el plan B1 sin conflicto, y creó su propio plan serverless
-> (`ASP-RSGRSC1RMIAD02-5e47`, FC1). Para el orquestador largo sigue valiendo lo de arriba: si
-> necesitas timeout ilimitado y Always On, va sobre el B1.
+La solución no es un timeout más largo —no existe— sino **que la conexión nunca esté inactiva**:
+
+```
+POST /api/sesiones/{id}/mensaje   -> acepta el trabajo y responde al instante
+GET  /api/sesiones/{id}/eventos   -> stream SSE: progreso, latidos cada 20 s, resultado
+```
+
+El trabajo largo corre en una tarea de fondo y habla por el stream. De paso, el analista ve qué
+agente va por dónde en lugar de un spinner de tres minutos.
+
+> **Always On es obligatorio**, más que en una web normal: el análisis continúa después de que el
+> POST haya respondido. Sin Always On, App Service descarga la app por inactividad y se lleva por
+> delante los análisis en curso.
+
+La Function App `afaws1rmiad02` **se queda como está**: sigue sirviendo la tool
+`obtener_estados_financieros` por HTTP para que Foundry la ejecute server-side. Son dos piezas con
+responsabilidades distintas, no duplicadas.
 
 ---
 
-## 3. Arquitectura recomendada
+## 3. Arquitectura
 
 ```
-Analista (Teams)
-      │  mensaje + reporte de créditos + informe comercial
+Analista (navegador)
+      │  mensaje + adjuntos (reporte de créditos, informe comercial, EEFF)
       ▼
-Azure Bot Service  (solo enruta, no ejecuta código)
-      │
-      ▼
-┌─────────────────── Function App (plan B1, Always On) ───────────────────┐
-│                                                                         │
-│  [HTTP trigger] /api/messages                                           │
-│     ├─ responde "Analizando..." en < 15 s                               │
-│     ├─ guarda los adjuntos en Blob Storage                              │
-│     └─ encola el trabajo (Storage Queue)                                │
-│                             │                                           │
-│  [Queue trigger]  ◄─────────┘                                           │
-│     └─ ORQUESTADOR (WorkflowBuilder, código Python)                     │
-│           │                                                             │
-│           ├─ Document Intelligence: extrae el RUC de los documentos     │
-│           │                                                             │
-│           ├──── fan-out (paralelo) ────┐                                │
-│           │                            │                                │
-│      agente financiero           agente sectorial                       │
-│      (RUC -> Blob -> EEFF)       (docs + web + knowledge base)          │
-│           │                            │                                │
-│           └──── fan-in ────────────────┘                                │
-│                       │                                                 │
-│               agente validador de consistencia                          │
-│                       │                                                 │
-│               agente generador de reporte                               │
-│                       │                                                 │
-│           └─ mensaje proactivo a Teams con el informe                   │
-└─────────────────────────────────────────────────────────────────────────┘
+┌──────────── App Service B1 · awaws1rmiad02 · Always On ────────────┐
+│                                                                    │
+│  POST /mensaje  ──> acepta y responde al instante                  │
+│  GET  /eventos  <── stream SSE (progreso + latidos + resultado)    │
+│                                                                    │
+│  ① INTAKE (gpt-4.1-mini)                                           │
+│     extrae empresa / RUC / sector del mensaje y de los adjuntos    │
+│     ¿falta algo? -> pregunta y se detiene aquí                     │
+│                      │                                             │
+│  ② FAN-OUT CONCURRENTE (código, siempre los tres)                  │
+│         ┌────────────┼────────────┐                                │
+│    financiero     sectorial    reportes-previos                    │
+│         └────────────┼────────────┘                                │
+│  ③ FAN-IN                                                          │
+│                generador-reporte  ──> informe integrado            │
+│                      │                                             │
+│  ④ SEGUIMIENTO (enrutado dinámico, gpt-4.1-mini)                   │
+│     "¿cuál era el ratio?"      -> responde del informe    (~2 s)   │
+│     "profundiza en sectorial"  -> reactiva SOLO ese agente         │
+│     "cambia el RUC"            -> repite el fan-out completo       │
+│                                   y regenera el informe            │
+└────────────────────────────────────────────────────────────────────┘
+         │ invoca por nombre (FoundryAgent)
+         ▼
+   Prompt agents en Foundry — sus tools openapi/mcp corren server-side
 ```
 
-### El orquestador NO debe ser un prompt agent
+### Un patrón por fase, no uno para todo
 
-En tu diagrama el orquestador aparece como un agente más. **Recomiendo que sea código Python**, no
-un prompt agent. Razones concretas:
+La guía de patrones de agentes de Azure describe la **orquestación simultánea** (concurrente), y
+es la correcta para la fase ②: los tres análisis son independientes, así que el coste es el del
+más lento (~85 s) y no la suma (~4 min).
 
-1. **Recibe archivos binarios** (PDF/Excel). Un prompt agent recibe texto, no maneja la ingesta.
-2. **El fan-out debe ser determinista.** Siempre corren financiero y sectorial. Si lo decide un LLM,
-   a veces se salta uno y el informe sale incompleto.
-3. **Necesita checkpoints.** Si el paso 3 de 5 falla, quieres reanudar, no re-ejecutar 3 minutos.
-4. **Costo y latencia.** Un LLM orquestando agrega llamadas al modelo que no aportan criterio.
+Pero aplicarla a las cuatro fases sería un error:
 
-Los **4 agentes especialistas sí son prompt agents** (ahí el juicio del LLM es el valor).
-El orquestador es plumbing: código.
+| Fase | Patrón | Por qué no el concurrente |
+|---|---|---|
+| ① Intake | Puerta determinista + extracción | No hay nada que paralelizar: o están los datos o se pregunta |
+| ② Análisis | **Concurrente** | Aquí sí: independientes y lentos |
+| ③ Integración | Secuencial (fan-in) | Necesita las tres salidas; por definición va después |
+| ④ Seguimiento | **Enrutado dinámico** | Relanzar los tres por un "profundiza en sectorial" cuesta 85 s para tirar dos |
 
-### Orquestación con `WorkflowBuilder`
+La fase ④ es la que más se aleja del patrón simultáneo, y es la que más usará el analista.
 
-`agent-framework` ya trae lo necesario (verificado en la versión instalada):
+### El intake no es un adorno: los especialistas no pueden preguntar
 
-```python
-from agent_framework import WorkflowBuilder
+Los tres especialistas están escritos para **no preguntar nunca**, y es la decisión correcta: un
+agente que se detiene a preguntar en mitad de un fan-out deja la rama colgada.
 
-workflow = (
-    WorkflowBuilder(start_executor=extractor_ruc, checkpoint_storage=storage)
-    .add_fan_out_edges(extractor_ruc, [agente_financiero, agente_sectorial])
-    .add_fan_in_edges([agente_financiero, agente_sectorial], agente_validador)
-    .add_edge(agente_validador, agente_generador)
-    .build()
-)
-
-resultado = await workflow.run(mensaje)
+```
+sectorial        -> "Nunca te detengas a hacer preguntas: no preguntes el sector..."
+reportes-previos -> "Nunca te detengas a hacer preguntas: no pidas confirmación..."
+financiero       -> "Si el mensaje no trae un RUC, pídelo y no continúes."
 ```
 
-API disponible y confirmada:
+Consecuencia: si falta el RUC, el financiero se planta y el informe sale cojo **sin que nadie
+avise al analista**. Por eso la aclaración ocurre antes del fan-out, en un solo sitio
+(`orchestrator/intake.py`), y pide de una vez todo lo que falte.
 
-| Necesidad | API |
-|---|---|
-| Ejecutar en paralelo | `add_fan_out_edges(source, targets)` |
-| Consolidar resultados | `add_fan_in_edges(sources, target)` |
-| Secuencia | `add_edge(a, b)` / `add_chain([...])` |
-| Ramas condicionales | `add_switch_case_edge_group(...)` |
-| Reanudar tras fallo | `workflow.run(checkpoint_id=..., checkpoint_storage=...)` |
-| Diagrama del flujo | `WorkflowViz` |
+El intake lee también los adjuntos, así que "analiza esta empresa" + el informe comercial en PDF
+basta: el RUC y el sector salen del documento. Verificado end-to-end.
+
+### Qué es código y qué es LLM
+
+El README anterior sostenía que el orquestador debía ser código y no un prompt agent. Sigue
+siendo cierto **en lo que importa**: el reparto de trabajo es determinista. Siempre corren los
+tres; ningún modelo decide saltarse uno.
+
+Pero el sistema conversacional necesita criterio en dos puntos muy acotados, y ahí el LLM sí
+aporta: entender "analiza Andes Dorado, aquí va su informe comercial" (intake) y entender si
+"profundiza en el sector" significa releer el informe o relanzar un agente (enrutado). Ambos
+corren sobre `gpt-4.1-mini`: son clasificaciones cortas, no análisis.
+
+```
+Determinista (código)        Criterio (LLM)
+─────────────────────        ──────────────
+qué agentes corren           qué empresa/RUC/sector hay en el texto
+en qué orden                 si una pregunta necesita un agente o no
+qué hacer si uno falla       el análisis en sí (los especialistas)
+cómo se arma el informe
+```
+
+### Resiliencia: un especialista caído no tumba el informe
+
+`asyncio.gather(return_exceptions=True)` más un timeout por rama. Si el sectorial falla, el
+informe se redacta con los otros dos y **declara explícitamente** qué faltó: el prompt del
+generador se lo exige.
+
+No es teórico. En la primera corrida real el sectorial cayó con un 429 de cuota y el informe
+salió igual, con esta frase: *"No se cuenta con análisis sectorial actualizado en este informe, lo
+que deja sin cubrir la validación de tendencias macro"*. Perder 85 s de trabajo bueno porque una
+rama falló no es aceptable cuando cada corrida cuesta minutos.
+
+> ⚠️ **El fan-out multiplica el consumo instantáneo de tokens.** Tres agentes a la vez sobre el
+> mismo despliegue de gpt-4.1 pueden superar el TPM de la región aunque cada uno quepa de sobra.
+> Hay reintentos con espera creciente ante 429 (`invocar_con_reintentos`), que llevaron esa misma
+> corrida de 2/3 a 3/3. Lo que no arreglan es una cuota baja de forma estructural: para eso hay
+> que subir el TPM del despliegue. Ver `app_service.md` §6.
+
+### El informe se regenera, no se parchea
+
+Las **secciones son la fuente de verdad**; el informe es una proyección de ellas. Cuando una
+pregunta de seguimiento actualiza el análisis sectorial, el informe se vuelve a generar completo
+desde las tres secciones. Parchear el texto anterior dejaría párrafos huérfanos del análisis
+viejo contradiciendo al nuevo.
 
 ---
 
@@ -317,10 +382,10 @@ invocar la herramienta desde el playground.
 |---|---|---|
 | **Function App** (Flex Consumption) | Tool server-side | ✅ **hecha** (`afaws1rmiad02`) |
 | **Application Insights** | Trazas, depurar por qué un informe salió mal | ✅ **hecha** (`afaws1rmiad02`) |
-| Hosting del orquestador (plan B1) | Flujo largo de ~3 min con Always On | **Alta** |
-| **Storage Queue** (en `stacs1miabackd02`) | Desacoplar el trabajo largo | **Alta** |
-| Contenedor `reportes` en Blob | Guardar informes generados y adjuntos entrantes | Media |
-| Cosmos DB | Estado de conversaciones y `ConversationReference` | Media |
+| Hosting del orquestador (plan B1) | Flujo largo con Always On | ✅ **creado** (`awaws1rmiad02`, falta config) |
+| ~~Storage Queue~~ | Ya no aplica: el flujo es interactivo, no por cola (§2) | — |
+| Contenedor `sesiones` en Blob | Snapshot de sesiones y auditoría | Lo crea la app sola |
+| Cosmos DB | Solo si se escala a más de una instancia | Baja |
 
 > **Application Insights es el que más urge.** Hoy no tienes ninguna visibilidad: cuando un informe
 > salga mal en producción, no vas a poder saber si falló el RUC, la tool, el validador o el modelo.
@@ -340,9 +405,32 @@ Intelligence sí.
 |---|---|
 | `AzureCliCredential` → `DefaultAzureCredential` | ✅ **hecho** |
 | Rol `Storage Blob Data Reader` para la identidad de la Function | ✅ **hecho** (ver `roles.md`) |
-| Agentes validador y generador de reporte | pendiente |
-| Extracción de RUC con Document Intelligence | pendiente |
+| Agente `reportes-previos` | ✅ **publicado** (v1) |
+| Agente `generador-reporte` | ✅ **publicado** (v1) |
+| Orquestador con fan-out concurrente | ✅ **hecho** (`orchestrator/`, probado end-to-end) |
+| Interacción de seguimiento sobre el informe | ✅ **hecha** (`orchestrator/seguimiento.py`) |
+| Extracción del RUC desde los adjuntos | ✅ **hecha** (`orchestrator/intake.py` + `adjuntos.py`) |
+| Lectura de PDFs adjuntos con Document Intelligence (`prebuilt-layout`) | ✅ **hecha**, activada por defecto |
+| Agente validador de consistencia | **aplazado a propósito** (ver abajo) |
+| Exportación del informe a Word / PPT | pendiente |
 | Mensaje proactivo a Teams | pendiente |
+
+### Sobre el validador de consistencia
+
+Está fuera del alcance actual por decisión tuya, y encaja bien que así sea: **parte de su trabajo
+ya lo hace el generador de reporte**. Su prompt le obliga a cruzar las tres fuentes y declarar las
+contradicciones en la sección "Discrepancias entre fuentes" (p. ej. liquidez deteriorada frente a
+historial de pago impecable).
+
+Cuando lo retomes, la pregunta útil es qué añade sobre eso. Dos opciones con sentido distinto:
+
+- **Validador de hechos**: comprueba que cada cifra del informe exista en la sección de origen, para
+  cazar invenciones del redactor. Es verificación, no análisis, y encaja mejor como código que como
+  agente.
+- **Segunda opinión**: un agente que juzgue la solidez del análisis. Es criterio, y ahí sí un prompt
+  agent aporta.
+
+Enchufarlo es un `add_edge` conceptual entre `orquestacion.py` y `reporte.py`: el sitio ya está.
 
 ---
 
@@ -405,19 +493,23 @@ las conexiones por identidad administrada seguirán fallando.
 
 ---
 
-## 7. Roadmap sugerido
+## 7. Roadmap
 
-| # | Paso | Resultado |
+| # | Paso | Estado |
 |---|---|---|
-| 1 | Application Insights + tracing | Visibilidad antes de crecer |
-| 2 | Function App sobre el plan B1 + Storage Queue | Base de ejecución asíncrona |
-| 3 | Orquestador con `WorkflowBuilder` (fan-out/fan-in) | Financiero + sectorial en paralelo |
-| 4 | Document Intelligence para extraer el RUC | Se acabó pasarlo a mano |
-| 5 | Agentes validador y generador de reporte | Flujo completo |
-| 6 | Bot backend + mensaje proactivo | Producto usable en Teams |
-| 7 | Agente revisor de reportes previos | Cierra tu diagrama |
+| 1 | Agentes `reportes-previos` y `generador-reporte` | ✅ publicados |
+| 2 | Orquestador: intake, fan-out concurrente, fan-in, seguimiento | ✅ probado end-to-end |
+| 3 | App Service `awaws1rmiad02` sobre el plan B1 | ✅ creado |
+| 4 | **Roles RBAC + app settings + despliegue del código** | ⬜ `python scripts/deploy_webapp.py --all` |
+| 5 | Subir el TPM de `gpt-4.1` (el fan-out satura la cuota) | ⬜ `app_service.md` §6 |
+| 6 | Application Insights sobre el App Service | ⬜ sigue siendo lo que más urge |
+| 7 | Autenticación con Entra ID antes de usuarios reales | ⬜ |
+| 8 | Exportación del informe a Word / PPT | ⬜ |
+| 9 | Validador de consistencia (decidir antes qué añade, §5) | ⬜ aplazado |
+| 10 | Bot de Teams contra la misma API | ⬜ |
 
-Los pasos 1 y 2 son la base: hacerlos primero evita rehacer trabajo después.
+El paso 4 es el único que bloquea el uso real: el código está escrito y probado, falta permiso y
+configuración.
 
 ---
 
@@ -425,10 +517,13 @@ Los pasos 1 y 2 son la base: hacerlos primero evita rehacer trabajo después.
 
 | Pregunta | Respuesta |
 |---|---|
-| ¿App Service, Function o ambos? | **Function App** sobre el plan B1 existente |
-| ¿El orquestador es un prompt agent? | **No**, código Python con `WorkflowBuilder` |
-| ¿Los especialistas son prompt agents? | **Sí**, los 4 |
-| ¿Hace falta Azure Function para la tool? | **No**, salvo que quieras usar el playground |
-| ¿Por qué asíncrono? | El flujo dura ~3 min; Teams corta a los 15 s |
-| ¿Qué recurso urge más? | **Application Insights** |
-| ¿Qué recurso tienes sin usar? | **Document Intelligence** (extracción del RUC) |
+| ¿App Service, Function o ambos? | **App Service** para el orquestador (§2); la Function sigue sirviendo la tool |
+| ¿El orquestador es un prompt agent? | **No**: código Python. El reparto de trabajo es determinista |
+| ¿Y la parte conversacional? | LLM en dos puntos acotados: intake y enrutado, con `gpt-4.1-mini` |
+| ¿Los especialistas son prompt agents? | **Sí**, los 4 (3 analistas + el redactor) |
+| ¿Cómo los invoca el orquestador? | `FoundryAgent` por nombre: Foundry sigue siendo la fuente de verdad |
+| ¿Es buena la orquestación simultánea? | **Sí, para la fase de análisis.** Para el seguimiento, enrutado dinámico (§3) |
+| ¿Por qué streaming y no un POST que espere? | El flujo supera los 230 s del balanceador; el stream nunca está inactivo |
+| ¿Qué pasa si un especialista falla? | El informe sale con los demás y declara qué faltó. Probado con un 429 real |
+| ¿Qué recurso urge más? | **Application Insights**, y subir el TPM de `gpt-4.1` |
+| ¿Qué falta para usarlo? | Un comando: `python scripts/deploy_webapp.py --all` |

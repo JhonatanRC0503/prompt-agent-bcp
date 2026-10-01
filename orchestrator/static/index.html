@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Análisis de Riesgo Crediticio</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/14.1.3/marked.min.js"></script>
+<style>
+  :root{
+    --fondo:#f6f7f9; --panel:#ffffff; --borde:#e2e5ea; --texto:#13181f; --suave:#5d6673;
+    --acento:#0a5ad6; --acento-suave:#e8f0fd; --ok:#0a7c42; --error:#c0392b; --espera:#b8860b;
+    --radio:10px; --sombra:0 1px 2px rgba(16,24,40,.06),0 4px 12px rgba(16,24,40,.05);
+  }
+  @media (prefers-color-scheme:dark){ :root:not([data-theme="light"]){
+    --fondo:#0e1116;--panel:#161b22;--borde:#2a313c;--texto:#e6edf3;--suave:#9aa6b2;
+    --acento:#4b9bff;--acento-suave:#17263d;--ok:#3fb950;--error:#f85149;--espera:#d29922;
+  }}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--fondo);color:var(--texto);
+    font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+  header{padding:14px 16px;border-bottom:1px solid var(--borde);background:var(--panel);
+    display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+  header h1{font-size:16px;margin:0;font-weight:650;letter-spacing:-.01em}
+  .ficha{margin-left:auto;display:flex;gap:6px;flex-wrap:wrap}
+  .pastilla{font-size:12px;padding:3px 9px;border-radius:999px;background:var(--acento-suave);
+    color:var(--acento);border:1px solid transparent;white-space:nowrap}
+  main{display:grid;grid-template-columns:minmax(340px,2fr) 3fr;gap:16px;padding:16px;
+    height:calc(100vh - 59px)}
+  @media (max-width:900px){ main{grid-template-columns:1fr;height:auto} }
+  .col{background:var(--panel);border:1px solid var(--borde);border-radius:var(--radio);
+    box-shadow:var(--sombra);display:flex;flex-direction:column;min-height:0;overflow:hidden}
+  .cab{padding:10px 14px;border-bottom:1px solid var(--borde);font-size:13px;font-weight:600;
+    color:var(--suave);display:flex;align-items:center;gap:8px}
+  .cuerpo{flex:1;overflow-y:auto;padding:14px;min-height:0}
+  @media (max-width:900px){ .cuerpo{max-height:60vh} }
+  .burbuja{margin-bottom:12px;padding:10px 13px;border-radius:var(--radio);max-width:92%;
+    white-space:pre-wrap;word-wrap:break-word}
+  .analista{background:var(--acento);color:#fff;margin-left:auto;white-space:pre-wrap}
+  .asistente{background:var(--fondo);border:1px solid var(--borde)}
+  .sistema{font-size:12.5px;color:var(--suave);padding:4px 2px;max-width:100%}
+  .agentes{display:flex;gap:8px;padding:10px 14px;border-bottom:1px solid var(--borde);flex-wrap:wrap}
+  .agente{font-size:12px;padding:4px 10px;border-radius:999px;border:1px solid var(--borde);
+    color:var(--suave);display:flex;align-items:center;gap:6px}
+  .agente[data-estado="corriendo"]{border-color:var(--espera);color:var(--espera)}
+  .agente[data-estado="ok"]{border-color:var(--ok);color:var(--ok)}
+  .agente[data-estado="error"]{border-color:var(--error);color:var(--error)}
+  .punto{width:7px;height:7px;border-radius:50%;background:currentColor}
+  .agente[data-estado="corriendo"] .punto{animation:late 1s ease-in-out infinite}
+  @keyframes late{0%,100%{opacity:1}50%{opacity:.25}}
+  form{border-top:1px solid var(--borde);padding:10px;display:flex;flex-direction:column;gap:8px}
+  textarea{width:100%;border:1px solid var(--borde);border-radius:8px;padding:9px 11px;resize:vertical;
+    min-height:62px;font:inherit;background:var(--fondo);color:var(--texto)}
+  textarea:focus{outline:2px solid var(--acento);outline-offset:-1px}
+  .acciones{display:flex;gap:8px;align-items:center}
+  button{background:var(--acento);color:#fff;border:0;border-radius:8px;padding:9px 16px;
+    font:inherit;font-weight:600;cursor:pointer}
+  button:disabled{opacity:.5;cursor:not-allowed}
+  .adjuntar{background:transparent;color:var(--acento);border:1px solid var(--borde);font-weight:500}
+  #listaArchivos{font-size:12px;color:var(--suave);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .informe{padding:18px 22px;overflow-y:auto;flex:1;min-height:0}
+  .informe h1,.informe h2{border-bottom:1px solid var(--borde);padding-bottom:5px;margin-top:22px;letter-spacing:-.01em}
+  .informe h1{font-size:21px} .informe h2{font-size:17px} .informe h3{font-size:15px;margin-top:18px}
+  .informe table{border-collapse:collapse;width:100%;margin:12px 0;font-size:13.5px;display:block;overflow-x:auto}
+  .informe th,.informe td{border:1px solid var(--borde);padding:6px 9px;text-align:left}
+  .informe th{background:var(--fondo);font-weight:600}
+  .informe img{max-width:100%;height:auto}
+  .informe code{background:var(--fondo);padding:1px 5px;border-radius:4px;font-size:13px}
+  .informe pre{background:var(--fondo);padding:11px;border-radius:8px;overflow-x:auto}
+  .informe blockquote{border-left:3px solid var(--espera);margin:12px 0;padding:4px 14px;color:var(--suave)}
+  .vacio{color:var(--suave);text-align:center;padding:48px 20px;font-size:14px}
+</style>
+</head>
+<body>
+<header>
+  <h1>Análisis de Riesgo Crediticio</h1>
+  <div class="ficha" id="ficha"></div>
+</header>
+
+<main>
+  <section class="col">
+    <div class="cab">Conversación</div>
+    <div class="agentes" id="agentes"></div>
+    <div class="cuerpo" id="chat"></div>
+    <form id="formulario">
+      <textarea id="texto" placeholder="Ej.: Hazme el análisis de Compañía Minera Andes Dorado S.A., RUC 20498765432, sector minería.&#10;&#10;O adjunta el reporte de créditos y extraigo los datos de ahí."></textarea>
+      <div class="acciones">
+        <input type="file" id="archivos" multiple hidden
+               accept=".pdf,.xlsx,.xlsm,.docx,.txt,.csv,.md">
+        <button type="button" class="adjuntar" id="btnAdjuntar">Adjuntar</button>
+        <span id="listaArchivos"></span>
+        <button type="submit" id="btnEnviar">Enviar</button>
+      </div>
+    </form>
+  </section>
+
+  <section class="col">
+    <div class="cab">Informe integrado</div>
+    <div class="informe" id="informe">
+      <div class="vacio">El informe aparecerá aquí cuando terminen los tres análisis.</div>
+    </div>
+  </section>
+</main>
+
+<script>
+const ETIQUETAS = {financiero:"Financiero", sectorial:"Sectorial", reportes_previos:"Reportes previos"};
+const chat = document.getElementById("chat");
+const informe = document.getElementById("informe");
+const panelAgentes = document.getElementById("agentes");
+const ficha = document.getElementById("ficha");
+const entrada = document.getElementById("texto");
+const inputArchivos = document.getElementById("archivos");
+const listaArchivos = document.getElementById("listaArchivos");
+const btnEnviar = document.getElementById("btnEnviar");
+
+let idSesion = null, flujo = null, ultimoEvento = 0;
+
+function burbuja(clase, texto, esMarkdown = false) {
+  const d = document.createElement("div");
+  d.className = "burbuja " + clase;
+  if (esMarkdown) d.innerHTML = marked.parse(texto); else d.textContent = texto;
+  chat.appendChild(d);
+  chat.scrollTop = chat.scrollHeight;
+  return d;
+}
+function sistema(texto) { burbuja("sistema", texto); }
+
+function pintarAgentes(estados) {
+  panelAgentes.innerHTML = "";
+  for (const [clave, etiqueta] of Object.entries(ETIQUETAS)) {
+    const e = estados[clave] || "en espera";
+    const d = document.createElement("div");
+    d.className = "agente";
+    d.dataset.estado = e;
+    d.innerHTML = `<span class="punto"></span>${etiqueta}`;
+    panelAgentes.appendChild(d);
+  }
+}
+const estadosAgentes = {};
+pintarAgentes(estadosAgentes);
+
+function pintarFicha(datos) {
+  ficha.innerHTML = "";
+  for (const campo of ["empresa", "ruc", "sector"]) {
+    if (!datos[campo]) continue;
+    const s = document.createElement("span");
+    s.className = "pastilla";
+    s.textContent = `${campo}: ${datos[campo]}`;
+    ficha.appendChild(s);
+  }
+}
+
+async function asegurarSesion() {
+  if (idSesion) return idSesion;
+  const r = await fetch("/api/sesiones", {method: "POST"});
+  idSesion = (await r.json()).id;
+  conectar();
+  return idSesion;
+}
+
+function conectar() {
+  if (flujo) flujo.close();
+  flujo = new EventSource(`/api/sesiones/${idSesion}/eventos?desde=${ultimoEvento}`);
+  flujo.onmessage = (e) => manejar(JSON.parse(e.data));
+  // Si App Service recicla la conexión, EventSource reintenta solo; `desde` evita duplicados.
+  flujo.onerror = () => {};
+}
+
+function manejar(ev) {
+  if (typeof ev.i === "number") ultimoEvento = ev.i + 1;
+  switch (ev.tipo) {
+    case "latido": break;
+    case "adjuntos":
+      sistema("Documentos leídos: " + ev.archivos
+        .map(a => `${a.nombre} (${a.extraido_con}, ${a.caracteres} caracteres)`).join("; "));
+      break;
+    case "intake_inicio": sistema("Identificando empresa, RUC y sector…"); break;
+    case "intake_fin":
+      pintarFicha(ev.datos);
+      if (ev.de_donde) sistema(ev.de_donde);
+      if (ev.sector_deducido) sistema("Nota: el sector se dedujo del contexto, no venía explícito.");
+      break;
+    case "necesita_datos": burbuja("asistente", ev.texto, true); liberar(); break;
+    case "fanout_inicio":
+      sistema("Lanzando los tres análisis en paralelo…");
+      for (const k of Object.keys(ETIQUETAS)) estadosAgentes[k] = "en espera";
+      pintarAgentes(estadosAgentes);
+      break;
+    case "agente_inicio":
+      estadosAgentes[ev.seccion] = "corriendo"; pintarAgentes(estadosAgentes);
+      break;
+    case "agente_fin":
+      estadosAgentes[ev.seccion] = ev.estado; pintarAgentes(estadosAgentes);
+      if (ev.estado === "error") sistema(`${ETIQUETAS[ev.seccion]}: falló — ${ev.error}`);
+      break;
+    case "fanout_fin": sistema(`Análisis terminados: ${ev.completados} de ${ev.total}.`); break;
+    case "reporte_inicio": sistema("Integrando el informe final…"); break;
+    case "reporte_fin": break;
+    case "enrutado":
+      sistema(ev.accion === "responder"
+        ? "Respondo con el informe actual."
+        : `Reactivando: ${(ev.secciones || []).map(s => ETIQUETAS[s] || s).join(", ")} — ${ev.motivo}`);
+      break;
+    case "respuesta": burbuja("asistente", ev.texto, true); liberar(); break;
+    case "error": burbuja("asistente", "Error: " + ev.mensaje); liberar(); break;
+    case "estado":
+      if (ev.estado === "listo") { cargarInforme(); liberar(); }
+      break;
+  }
+}
+
+async function cargarInforme() {
+  const r = await fetch(`/api/sesiones/${idSesion}`);
+  const s = await r.json();
+  pintarFicha(s.datos);
+  if (s.reporte) {
+    informe.innerHTML = marked.parse(s.reporte);
+    informe.scrollTop = 0;
+    sistema("Informe actualizado.");
+  }
+}
+
+function liberar() { btnEnviar.disabled = false; btnEnviar.textContent = "Enviar"; }
+
+document.getElementById("btnAdjuntar").onclick = () => inputArchivos.click();
+inputArchivos.onchange = () => {
+  listaArchivos.textContent = [...inputArchivos.files].map(f => f.name).join(", ");
+};
+
+document.getElementById("formulario").onsubmit = async (e) => {
+  e.preventDefault();
+  const texto = entrada.value.trim();
+  if (!texto && inputArchivos.files.length === 0) return;
+
+  await asegurarSesion();
+  const cuerpo = new FormData();
+  cuerpo.append("texto", texto);
+  for (const f of inputArchivos.files) cuerpo.append("archivos", f);
+
+  if (texto) burbuja("analista", texto);
+  entrada.value = "";
+  listaArchivos.textContent = "";
+  inputArchivos.value = "";
+  btnEnviar.disabled = true;
+  btnEnviar.textContent = "Trabajando…";
+
+  const r = await fetch(`/api/sesiones/${idSesion}/mensaje`, {method: "POST", body: cuerpo});
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({detail: r.statusText}));
+    burbuja("asistente", "Error: " + err.detail);
+    liberar();
+  }
+};
+
+entrada.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) document.getElementById("formulario").requestSubmit();
+});
+</script>
+</body>
+</html>
